@@ -50,7 +50,6 @@
 #define CAM_PERF       (1 << 25)
 
 #define CAM_HYP        (1 << 26)
-#define CAM_IR_LED     (1 << 27)
 #define STR_BUFFER_MAX_LENGTH  1024
 
 /*
@@ -121,7 +120,7 @@ const char *cam_get_module_name(unsigned int module_id);
  * @args     :  Arguments which needs to be print in log
  */
 #define CAM_INFO_RATE_LIMIT(__module, fmt, args...)                 \
-	pr_info_ratelimited("CAM_INFO: %s: %s: %d " fmt "\n",            \
+	pr_err_ratelimited("CAM_INFO: %s: %s: %d " fmt "\n",            \
 		cam_get_module_name(__module), __func__,  __LINE__, ##args)
 
 /*
