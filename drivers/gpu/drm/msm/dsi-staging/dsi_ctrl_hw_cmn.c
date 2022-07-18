@@ -37,6 +37,10 @@ static const u8 cmd_mode_format_map[DSI_PIXEL_FORMAT_MAX] = {
 static const u8 video_mode_format_map[DSI_PIXEL_FORMAT_MAX] = {
 	0x0, 0x1, 0x2, 0x3, 0x3, 0x3, 0x3 };
 
+// #ifdef OPLUS_BUG_STABILITY
+extern u32 g_scramble_switch_value;
+// #endif /*OPLUS_BUG_STABILITY*/
+
 /**
  * dsi_split_link_setup() - setup dsi split link configurations
  * @ctrl:             Pointer to the controller host hardware.
@@ -102,13 +106,16 @@ void dsi_ctrl_hw_cmn_host_setup(struct dsi_ctrl_hw *ctrl,
 	dsi_setup_trigger_controls(ctrl, cfg);
 	dsi_split_link_setup(ctrl, cfg);
 
+	#ifdef OPLUS_BUG_STABILITY
+	DSI_W32(ctrl, DSI_TEST_PATTERN_GEN_VIDEO_ENABLE, 1);
+	#endif /* OPLUS_BUG_STABILITY */
 	/* Setup T_CLK_PRE extend register */
-	reg_value = DSI_R32(ctrl, DSI_TEST_PATTERN_GEN_VIDEO_ENABLE);
-	if (cfg->t_clk_pre_extend)
-		reg_value |= BIT(0);
-	else
-		reg_value &= ~BIT(0);
-	DSI_W32(ctrl, DSI_TEST_PATTERN_GEN_VIDEO_ENABLE, reg_value);
+	//reg_value = DSI_R32(ctrl, DSI_TEST_PATTERN_GEN_VIDEO_ENABLE);
+	//if (cfg->t_clk_pre_extend)
+	//	reg_value |= BIT(0);
+	//else
+	//	reg_value &= ~BIT(0);
+	//DSI_W32(ctrl, DSI_TEST_PATTERN_GEN_VIDEO_ENABLE, reg_value);
 
 	/* Setup clocking timing controls */
 	reg_value = ((cfg->t_clk_post & 0x3F) << 8);
@@ -521,7 +528,11 @@ void dsi_ctrl_hw_cmn_video_engine_setup(struct dsi_ctrl_hw *ctrl,
 	DSI_W32(ctrl, DSI_VIDEO_MODE_DATA_CTRL, reg);
 	/* Disable Timing double buffering */
 	DSI_W32(ctrl, DSI_DSI_TIMING_DB_MODE, 0x0);
-
+// #ifdef OPLUS_BUG_STABILITY
+	if (1 == g_scramble_switch_value) {
+	    DSI_W32(ctrl, DSI_SCRAMBLE_CTRL, 0x1);
+	}
+// #endif /*OPLUS_BUG_STABILITY*/
 	pr_debug("[DSI_%d] Video engine setup done\n", ctrl->index);
 }
 

@@ -23,6 +23,14 @@
 #include "dsi_panel.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_parser.h"
+#ifdef OPLUS_BUG_STABILITY
+#include <soc/oppo/boot_mode.h>
+#include "oppo_display_private_api.h"
+#include "oppo_dc_diming.h"
+#include "oppo_onscreenfingerprint.h"
+#include "oppo_aod.h"
+#include "oppo_display_panel_common.h"
+#endif /* OPLUS_BUG_STABILITY */
 
 /**
  * topology is currently defined by a set of following 3 values:
@@ -43,6 +51,12 @@
 #define MAX_PANEL_JITTER		10
 #define DEFAULT_PANEL_PREFILL_LINES	25
 #define TICKS_IN_MICRO_SECOND		1000000
+
+__attribute__((weak)) int tp_control_cs_gpio(bool enable) {return 0;}
+static bool tp_enable_cs_flag = false;
+#ifdef OPLUS_FEATURE_LCD_CABC
+int is_support_cabc = 0;
+#endif/* OPLUS_FEATURE_LCD_CABC */
 
 enum dsi_dsc_ratio_type {
 	DSC_8BPC_8BPP,
@@ -116,7 +130,11 @@ int dsi_dsc_create_pps_buf_cmd(struct msm_display_dsc_info *dsc, char *buf,
 	*bp++ = 1;
 	*bp++ = 0;
 	*bp++ = 0;
-	*bp++ = 10;
+#ifdef OPLUS_BUG_STABILITY
+    *bp++ = 0;
+#else
+    *bp++ = 10;
+#endif /* OPLUS_BUG_STABILITY */
 	*bp++ = 0;
 	*bp++ = 128;
 
@@ -290,6 +308,24 @@ static int dsi_panel_gpio_request(struct dsi_panel *panel)
 		}
 	}
 
+	#ifdef OPLUS_BUG_STABILITY
+	if (gpio_is_valid(r_config->lcd_vci_gpio)) {
+		rc = gpio_request(r_config->lcd_vci_gpio, "vci_gpio");
+		if (rc) {
+			pr_err("request for vci_gpio failed, rc=%d\n", rc);
+			goto error_release_vci;
+		}
+	}
+
+	if (gpio_is_valid(r_config->err_flag_gpio)) {
+		rc = gpio_request(r_config->err_flag_gpio, "err_flag_gpio");
+		if (rc) {
+			pr_err("request for err_flag_gpio failed, rc=%d\n", rc);
+			goto error_release_err_flag;
+		}
+	}
+	#endif /* OPLUS_BUG_STABILITY */
+
 	goto error;
 error_release_mode_sel:
 	if (gpio_is_valid(panel->bl_config.en_gpio))
@@ -300,6 +336,14 @@ error_release_disp_en:
 error_release_reset:
 	if (gpio_is_valid(r_config->reset_gpio))
 		gpio_free(r_config->reset_gpio);
+#ifdef OPLUS_BUG_STABILITY
+error_release_vci:
+	if (gpio_is_valid(r_config->lcd_vci_gpio))
+		gpio_free(r_config->lcd_vci_gpio);
+error_release_err_flag:
+	if (gpio_is_valid(r_config->err_flag_gpio))
+		gpio_free(r_config->err_flag_gpio);
+#endif /* OPLUS_BUG_STABILITY */
 error:
 	return rc;
 }
@@ -320,6 +364,12 @@ static int dsi_panel_gpio_release(struct dsi_panel *panel)
 
 	if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
 		gpio_free(panel->reset_config.lcd_mode_sel_gpio);
+	#ifdef OPLUS_BUG_STABILITY
+	if (gpio_is_valid(r_config->lcd_vci_gpio))
+		gpio_free(r_config->lcd_vci_gpio);
+	if (gpio_is_valid(r_config->err_flag_gpio))
+		gpio_free(r_config->err_flag_gpio);
+	#endif /* OPLUS_BUG_STABILITY */
 
 	return rc;
 }
@@ -354,6 +404,18 @@ static int dsi_panel_reset(struct dsi_panel *panel)
 	struct dsi_panel_reset_config *r_config = &panel->reset_config;
 	int i;
 
+	#ifdef OPLUS_BUG_STABILITY
+	if (gpio_is_valid(panel->reset_config.lcd_vci_gpio)) {
+		rc = gpio_direction_output(panel->reset_config.lcd_vci_gpio, 1);
+
+		if (panel->reset_config.lcd_delay_vci_gpio)
+			usleep_range(panel->reset_config.lcd_delay_vci_gpio,
+				panel->reset_config.lcd_delay_vci_gpio + 100);
+		if (rc)
+			pr_err("unable to set lcd_vci_gpio dir for disp gpio rc=%d\n", rc);
+	}
+	#endif /* OPLUS_BUG_STABILITY */
+
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio)) {
 		rc = gpio_direction_output(panel->reset_config.disp_en_gpio, 1);
 		if (rc) {
@@ -361,6 +423,21 @@ static int dsi_panel_reset(struct dsi_panel *panel)
 			goto exit;
 		}
 	}
+
+	#ifdef OPLUS_BUG_STABILITY
+	if(!strcmp(panel->name, "samsung sofef03f_m amoled fhd+ panel with DSC")){
+		if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio)) {
+				rc = gpio_direction_output(panel->reset_config.lcd_mode_sel_gpio, 1);
+				if (rc) {
+					pr_err("unable to set dir for lcd_mode_sel_gpio gpio rc=%d\n", rc);
+				}
+		}
+
+		if (panel->reset_config.lcd_delay_mode_sel_gpio)
+					usleep_range(panel->reset_config.lcd_delay_mode_sel_gpio,
+						panel->reset_config.lcd_delay_mode_sel_gpio + 100);
+	}
+	#endif
 
 	if (r_config->count) {
 		rc = gpio_direction_output(r_config->reset_gpio,
@@ -387,24 +464,59 @@ static int dsi_panel_reset(struct dsi_panel *panel)
 			pr_err("unable to set dir for bklt gpio rc=%d\n", rc);
 	}
 
-	if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio)) {
-		bool out = true;
+#ifndef OPLUS_BUG_STABILITY
+		if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio)) {
+			bool out = true;
 
-		if ((panel->reset_config.mode_sel_state == MODE_SEL_DUAL_PORT)
-				|| (panel->reset_config.mode_sel_state
-					== MODE_GPIO_LOW))
-			out = false;
-		else if ((panel->reset_config.mode_sel_state
-				== MODE_SEL_SINGLE_PORT) ||
-				(panel->reset_config.mode_sel_state
-				 == MODE_GPIO_HIGH))
-			out = true;
+			if ((panel->reset_config.mode_sel_state == MODE_SEL_DUAL_PORT)
+					|| (panel->reset_config.mode_sel_state
+						== MODE_GPIO_LOW))
+				out = false;
+			else if ((panel->reset_config.mode_sel_state
+					== MODE_SEL_SINGLE_PORT) ||
+					(panel->reset_config.mode_sel_state
+				 	== MODE_GPIO_HIGH))
+				out = true;
 
-		rc = gpio_direction_output(
-			panel->reset_config.lcd_mode_sel_gpio, out);
-		if (rc)
-			pr_err("unable to set dir for mode gpio rc=%d\n", rc);
+			rc = gpio_direction_output(
+				panel->reset_config.lcd_mode_sel_gpio, out);
+			if (rc)
+				pr_err("unable to set dir for mode gpio rc=%d\n", rc);
+		}
+#else /* OPLUS_BUG_STABILITY */
+	if (true == panel->reset_timing || (!strcmp(panel->name, "samsung sofef03f_m amoled fhd+ panel with DSC"))) /* fixme: note for 19567 to do compatibiliy */
+	{
+		printk(KERN_INFO "%s: jump the code when 19567 90fps LCD\n", __func__);
 	}
+	else
+	{
+		if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio)) {
+			bool out = true;
+
+			if ((panel->reset_config.mode_sel_state == MODE_SEL_DUAL_PORT)
+					|| (panel->reset_config.mode_sel_state
+						== MODE_GPIO_LOW))
+				out = false;
+
+			 else if ((panel->reset_config.mode_sel_state
+					== MODE_SEL_SINGLE_PORT) ||
+					(panel->reset_config.mode_sel_state
+					 == MODE_GPIO_HIGH))
+				out = true;
+
+
+			rc = gpio_direction_output(
+				     panel->reset_config.lcd_mode_sel_gpio, out);
+			if (panel->reset_config.lcd_delay_mode_sel_gpio)
+				usleep_range(panel->reset_config.lcd_delay_mode_sel_gpio,
+					panel->reset_config.lcd_delay_mode_sel_gpio + 100);
+
+			if (rc)
+				pr_err("unable to set dir for mode gpio rc=%d\n", rc);
+
+		}
+	}
+#endif /* OPLUS_BUG_STABILITY */
 exit:
 	return rc;
 }
@@ -434,6 +546,22 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 static int dsi_panel_power_on(struct dsi_panel *panel)
 {
 	int rc = 0;
+	if(tp_enable_cs_flag) {
+		tp_enable_cs_flag = false;
+		tp_control_cs_gpio(true);
+	}
+	//#ifdef OPLUS_BUG_STABILITY
+	if (panel->reset_timing == true) {
+		if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio)) {
+			rc = gpio_direction_output(panel->reset_config.lcd_mode_sel_gpio, 1);
+
+			if (rc) {
+				pr_err("unable to set dir for lcd_mode_sel_gpio gpio rc=%d\n", rc);
+				goto error_disable_gpio;
+			}
+		}
+	}
+	//#endif /* OPLUS_BUG_STABILITY */
 
 	rc = dsi_pwr_enable_regulator(&panel->power_info, true);
 	if (rc) {
@@ -456,6 +584,14 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 	goto exit;
 
 error_disable_gpio:
+	//#ifdef OPLUS_BUG_STABILITY
+	if (panel->reset_timing == true) {
+		if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio)) {
+			gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
+		}
+	}
+	//#endif /* OPLUS_BUG_STABILITY */
+
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
@@ -474,30 +610,103 @@ exit:
 static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
-
+	#ifndef OPLUS_BUG_STABILITY
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
-	if (gpio_is_valid(panel->reset_config.reset_gpio))
-		gpio_set_value(panel->reset_config.reset_gpio, 0);
+	#else /* OPLUS_BUG_STABILITY */
+	if (gpio_is_valid(panel->reset_config.disp_en_gpio)) {
+		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
+		usleep_range(5000, 6000); /* fixme: note for project 19365 */
+		if (panel->reset_config.lcd_delay_disp_en_gpio)
+			usleep_range(panel->reset_config.lcd_delay_disp_en_gpio,
+				panel->reset_config.lcd_delay_disp_en_gpio + 100);
+	}
+	if (0 == tp_gesture_enable_flag()) {
+		if (gpio_is_valid(panel->reset_config.reset_gpio)) {
+			gpio_set_value(panel->reset_config.reset_gpio, 0);
+
+			usleep_range(10000, 12000); /* fixme: note for project 19365 */
+			if (panel->reset_config.lcd_delay_reset_gpio)
+				usleep_range(panel->reset_config.lcd_delay_reset_gpio,
+					panel->reset_config.lcd_delay_reset_gpio + 100);
+		}
+	}
+	#endif /* OPLUS_BUG_STABILITY */
+
+	#ifndef OPLUS_BUG_STABILITY
 	if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
 		gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
+	#else /* OPLUS_BUG_STABILITY */
+	if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio)) {
+		gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
+
+		if (panel->reset_config.lcd_delay_mode_sel_gpio)
+			usleep_range(panel->reset_config.lcd_delay_mode_sel_gpio,
+				panel->reset_config.lcd_delay_mode_sel_gpio + 100);
+	}
+	#endif /* OPLUS_BUG_STABILITY */
 
 	rc = dsi_panel_set_pinctrl_state(panel, false);
+	#ifdef OPLUS_BUG_STABILITY
+	if (panel->reset_config.lcd_delay_set_pinctrl_state)
+		usleep_range(panel->reset_config.lcd_delay_set_pinctrl_state,
+			panel->reset_config.lcd_delay_set_pinctrl_state + 100);
+	#endif /* OPLUS_BUG_STABILITY */
 	if (rc) {
 		pr_err("[%s] failed set pinctrl state, rc=%d\n", panel->name,
 		       rc);
 	}
 
+    #ifdef OPLUS_BUG_STABILITY
+	if (gpio_is_valid(panel->reset_config.lcd_vci_gpio)) {
+		gpio_set_value(panel->reset_config.lcd_vci_gpio, 0);
+
+		if (panel->reset_config.lcd_delay_vci_gpio)
+			usleep_range(panel->reset_config.lcd_delay_vci_gpio,
+				panel->reset_config.lcd_delay_vci_gpio + 100);
+	}
+	#endif /* OPLUS_BUG_STABILITY */
+
 	rc = dsi_pwr_enable_regulator(&panel->power_info, false);
+	#ifdef OPLUS_BUG_STABILITY
+	if (panel->reset_config.lcd_delay_enable_regulator)
+		usleep_range(panel->reset_config.lcd_delay_enable_regulator,
+			panel->reset_config.lcd_delay_enable_regulator + 100);
+	#endif /* OPLUS_BUG_STABILITY */
 	if (rc)
 		pr_err("[%s] failed to enable vregs, rc=%d\n", panel->name, rc);
-
+	if(0 == tp_gesture_enable_flag()){
+		tp_enable_cs_flag = true;
+		tp_control_cs_gpio(false);
+	}
 	return rc;
 }
+
+#ifdef OPLUS_BUG_STABILITY
+extern int oppo_seed_backlight;
+extern u32 oppo_last_backlight;
+extern u32 oppo_backlight_delta;
+extern ktime_t oppo_backlight_time;
+extern int oppo_dimlayer_bl_enabled;
+extern int oppo_dimlayer_bl_enable_real;
+extern int oppo_dimlayer_bl_alpha;
+extern int oppo_dimlayer_bl_alpha_v2;
+#endif /* OPLUS_BUG_STABILITY */
+#ifdef OPLUS_FEATURE_AOD_RAMLESS
+extern int oppo_display_mode;
+extern int oppo_display_update_aod_area_unlock(void);
+#endif /* OPLUS_FEATURE_AOD_RAMLESS */
+
+#ifndef OPLUS_BUG_STABILITY
 static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 				enum dsi_cmd_set_type type)
+#else  /* OPLUS_BUG_STABILITY */
+const char *cmd_set_prop_map[];
+int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
+				enum dsi_cmd_set_type type)
+#endif /* OPLUS_BUG_STABILITY */
 {
 	int rc = 0, i = 0;
 	ssize_t len;
@@ -507,6 +716,10 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 	struct dsi_display_mode *mode;
 	const struct mipi_dsi_host_ops *ops = panel->host->ops;
 
+#ifdef OPLUS_BUG_STABILITY
+	struct dsi_panel_cmd_set *oppo_cmd_set = NULL;
+	static int osc_cmd_skip_count = 0;
+#endif/* OPLUS_BUG_STABILITY */
 	if (!panel || !panel->cur_mode)
 		return -EINVAL;
 
@@ -516,6 +729,24 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 	count = mode->priv_info->cmd_sets[type].count;
 	state = mode->priv_info->cmd_sets[type].state;
 
+#ifdef OPLUS_BUG_STABILITY
+	if((0 == osc_cmd_skip_count) && (panel->oppo_priv.is_19781_lcd) && \
+			((DSI_CMD_OSC_CLK_MODEO0 == type)||(DSI_CMD_OSC_CLK_MODEO1 == type))) {
+		osc_cmd_skip_count = 1;
+		pr_err("first setting osc clk is skipped");
+		goto error;
+	}
+	pr_err("dsi_cmd %s\n", cmd_set_prop_map[type]);
+
+	if (oppo_seed_backlight) {
+		oppo_cmd_set = oppo_dsi_update_seed_backlight(panel, oppo_seed_backlight, type);
+		if (!IS_ERR_OR_NULL(oppo_cmd_set)) {
+			cmds = oppo_cmd_set->cmds;
+			count = oppo_cmd_set->count;
+			state = oppo_cmd_set->state;
+		}
+	}
+#endif /* OPLUS_BUG_STABILITY */
 	if (count == 0) {
 		pr_debug("[%s] No commands to be sent for state(%d)\n",
 			 panel->name, type);
@@ -528,6 +759,11 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 
 		if (cmds->last_command)
 			cmds->msg.flags |= MIPI_DSI_MSG_LASTCOMMAND;
+
+#ifdef OPLUS_BUG_STABILITY
+		if (panel->oppo_priv.skip_mipi_last_cmd)
+			cmds->msg.flags &= ~MIPI_DSI_MSG_LASTCOMMAND;
+#endif /* OPLUS_BUG_STABILITY */
 
 		len = ops->transfer(panel->host, &cmds->msg);
 		if (len < 0) {
@@ -622,10 +858,96 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 
 	if (panel->bl_config.bl_inverted_dbv)
 		bl_lvl = (((bl_lvl & 0xff) << 8) | (bl_lvl >> 8));
+#ifdef OPLUS_BUG_STABILITY
+	if ((get_oppo_display_scene() == OPPO_DISPLAY_AOD_SCENE) && ( bl_lvl == 1)) {
+		pr_err("dsi_cmd AOD mode return bl_lvl:%d\n",bl_lvl);
+		return 0;
+	}
+
+#ifdef OPLUS_FEATURE_AOD_RAMLESS
+	if (panel->oppo_priv.is_aod_ramless && !oppo_display_mode)
+		return 0;
+#endif /* OPLUS_FEATURE_AOD_RAMLESS */
+
+	if (panel->is_hbm_enabled)
+		return 0;
+
+if (oppo_display_get_hbm_mode()) {
+		return rc;
+	}
+
+	if (bl_lvl > 1) {
+		if (bl_lvl > oppo_last_backlight)
+			oppo_backlight_delta = bl_lvl - oppo_last_backlight;
+		else
+			oppo_backlight_delta = oppo_last_backlight - bl_lvl;
+		oppo_last_backlight = bl_lvl;
+		oppo_backlight_time = ktime_get();
+	}
+	if (oppo_dimlayer_bl_enabled != oppo_dimlayer_bl_enable_real) {
+		oppo_dimlayer_bl_enable_real = oppo_dimlayer_bl_enabled;
+		if (oppo_dimlayer_bl_enable_real) {
+			pr_err("Enter DC backlight\n");
+		} else {
+			pr_err("Exit DC backlight\n");
+		}
+	}
+
+	bl_lvl = oppo_panel_process_dimming_v2(panel, bl_lvl, false);
+
+	if (oppo_dimlayer_bl_enable_real) {
+		/*
+		 * avoid effect power and aod mode
+		 */
+		if (bl_lvl > 1)
+			bl_lvl = oppo_dimlayer_bl_alpha;
+	}
+
+	if (true || !strcmp(panel->name,"samsung amb655uv01 amoled fhd+ panel no DSC")||
+		!strcmp(panel->name,"samsung ams643xf01 amoled fhd+ panel without DSC")) {
+		const struct mipi_dsi_host_ops *ops = dsi->host->ops;
+		char payload[] = {MIPI_DCS_WRITE_CONTROL_DISPLAY, 0xE0};
+		struct mipi_dsi_msg msg;
+
+		if (!strcmp(panel->name,"samsung 20261 ams643ye01 amoled fhd+ panel without DSC")) {
+			if (bl_lvl > panel->bl_config.bl_normal_max_level)
+				dsi_panel_tx_cmd_set(panel, DSI_CMD_HBM_ENTER_SWITCH);
+			else
+				dsi_panel_tx_cmd_set(panel, DSI_CMD_HBM_EXIT_SWITCH);
+
+			if (rc)
+				DSI_ERR("[%s] failed to send DSI_CMD_SET_CMD_TO_VID_SWITCH cmds, rc=%d\n",
+				panel->name, rc);
+
+
+		} else {
+			if (bl_lvl > panel->bl_config.bl_normal_max_level)
+				payload[1] = 0xE0;
+			else
+				payload[1] = 0x20;
+
+			memset(&msg, 0, sizeof(msg));
+			msg.channel = dsi->channel;
+			msg.tx_buf = payload;
+			msg.tx_len = sizeof(payload);
+			msg.type = MIPI_DSI_DCS_SHORT_WRITE_PARAM;
+
+			rc = ops->transfer(dsi->host, &msg);
+
+			if (rc < 0)
+				pr_err("failed to backlight bl_lvl %d - ret=%d\n", bl_lvl, rc);
+		}
+	}
+#endif /* OPLUS_BUG_STABILITY */
 
 	rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
 	if (rc < 0)
 		pr_err("failed to update dcs backlight:%d\n", bl_lvl);
+
+#ifdef OPLUS_BUG_STABILITY
+	oppo_panel_process_dimming_v2_post(panel, false);
+	oppo_last_backlight = bl_lvl;
+#endif /* OPLUS_BUG_STABILITY */
 
 	return rc;
 }
@@ -689,7 +1011,18 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 	if (panel->host_config.ext_bridge_num)
 		return 0;
 
-	pr_debug("backlight type:%d lvl:%d\n", bl->type, bl_lvl);
+#ifdef OPLUS_BUG_STABILITY
+	{
+		static DEFINE_RATELIMIT_STATE(bl_rl, HZ/2, 1);
+		if(__ratelimit(&bl_rl)) {
+			DSI_INFO("backlight type:%d lvl:%d\n", bl->type, bl_lvl);
+		} else {
+			DSI_DEBUG("backlight type:%d lvl:%d\n", bl->type, bl_lvl);
+		}
+	}
+#else
+	DSI_DEBUG("backlight type:%d lvl:%d\n", bl->type, bl_lvl);
+#endif
 	switch (bl->type) {
 	case DSI_BACKLIGHT_WLED:
 		rc = backlight_device_set_brightness(bl->raw_bd, bl_lvl);
@@ -698,6 +1031,9 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 		rc = dsi_panel_update_backlight(panel, bl_lvl);
 		break;
 	case DSI_BACKLIGHT_EXTERNAL:
+		//#ifdef OPLUS_BUG_DEBUG
+		rc = backlight_device_set_brightness(bl->raw_bd, bl_lvl);
+		//#endif /*OPLUS_BUG_DEBUG*/
 		break;
 	case DSI_BACKLIGHT_PWM:
 		rc = dsi_panel_update_pwm_backlight(panel, bl_lvl);
@@ -724,8 +1060,14 @@ static u32 dsi_panel_get_brightness(struct dsi_backlight_config *bl)
 		if (bd->ops && bd->ops->get_brightness)
 			cur_bl_level = bd->ops->get_brightness(bd);
 		break;
-	case DSI_BACKLIGHT_DCS:
+	//#ifdef OPLUS_BUG_DEBUG
 	case DSI_BACKLIGHT_EXTERNAL:
+		/* Try to query the backlight level from the backlight device */
+		if (bd->ops && bd->ops->get_brightness)
+			cur_bl_level = bd->ops->get_brightness(bd);
+		break;
+	//#endif /*OPLUS_BUG_DEBUG*/
+	case DSI_BACKLIGHT_DCS:
 	case DSI_BACKLIGHT_PWM:
 	default:
 		/*
@@ -777,6 +1119,9 @@ static int dsi_panel_bl_register(struct dsi_panel *panel)
 	case DSI_BACKLIGHT_DCS:
 		break;
 	case DSI_BACKLIGHT_EXTERNAL:
+		//#ifdef OPLUS_BUG_DEBUG
+		rc = dsi_panel_wled_register(panel, bl);
+		//#endif /*OPLUS_BUG_DEBUG*/
 		break;
 	case DSI_BACKLIGHT_PWM:
 		rc = dsi_panel_pwm_register(panel);
@@ -1749,6 +2094,45 @@ const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command",
 	"qcom,mdss-dsi-qsync-on-commands",
 	"qcom,mdss-dsi-qsync-off-commands",
+//#ifdef OPLUS_BUG_STABILITY
+	"qcom,mdss-dsi-post-on-backlight",
+	"qcom,mdss-dsi-aod-on-command",
+	"qcom,mdss-dsi-aod-off-command",
+	"qcom,mdss-dsi-hbm-on-command",
+	"qcom,mdss-dsi-hbm-off-command",
+	"qcom,mdss-dsi-aod-hbm-on-command",
+	"qcom,mdss-dsi-aod-hbm-off-command",
+	"qcom,mdss-dsi-seed-0-command",
+	"qcom,mdss-dsi-seed-1-command",
+	"qcom,mdss-dsi-seed-2-command",
+	"qcom,mdss-dsi-seed-3-command",
+	"qcom,mdss-dsi-seed-4-command",
+	"qcom,mdss-dsi-seed-off-command",
+	"qcom,mdss-dsi-normal-hbm-on-command",
+	"qcom,mdss-dsi-aod-high-mode-command",
+	"qcom,mdss-dsi-aod-low-mode-command",
+	"qcom,mdss-dsi-cabc-off-command",
+	"qcom,mdss-dsi-cabc-low-mode-command",
+	"qcom,mdss-dsi-cabc-high-mode-command",
+	"qcom,mdss-dsi-data-dimming-on-command",
+	"qcom,mdss-dsi-data-dimming-off-command",
+	"qcom,mdss-dsi-osc-clk-mode0-command",
+	"qcom,mdss-dsi-osc-clk-mode1-command",
+	"qcom,mdss-dsi-seed-enter-command",
+	"qcom,mdss-dsi-seed-exit-command",
+	"qcom,mdss-dsi-hbm-enter-switch-command",
+	"qcom,mdss-dsi-hbm-exit-switch-command",
+	"qcom,mdss-dsi-levelkey-end-command",
+#ifdef OPLUS_FEATURE_AOD_RAMLESS
+	"qcom,mdss-dsi-failsafe-on-command",
+	"qcom,mdss-dsi-failsafe-off-command",
+#endif /* OPLUS_FEATURE_AOD_RAMLESS */
+#ifdef OPLUS_FEATURE_LCD_CABC
+	"qcom,mdss-dsi-cabc-ui-command",
+	"qcom,mdss-dsi-cabc-still-image-command",
+	"qcom,mdss-dsi-cabc-video-command",
+#endif /*OPLUS_FEATURE_LCD_CABC*/
+//#endif /*OPLUS_BUG_STABILITY*/
 };
 
 const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
@@ -1775,6 +2159,45 @@ const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command-state",
 	"qcom,mdss-dsi-qsync-on-commands-state",
 	"qcom,mdss-dsi-qsync-off-commands-state",
+//#ifdef OPLUS_BUG_STABILITY
+	"qcom,mdss-dsi-post-on-backlight-state",
+	"qcom,mdss-dsi-aod-on-command-state",
+	"qcom,mdss-dsi-aod-off-command-state",
+	"qcom,mdss-dsi-hbm-on-command-state",
+	"qcom,mdss-dsi-hbm-off-command-state",
+	"qcom,mdss-dsi-aod-hbm-on-command-state",
+	"qcom,mdss-dsi-aod-hbm-off-command-state",
+	"qcom,mdss-dsi-seed-0-command-state",
+	"qcom,mdss-dsi-seed-1-command-state",
+	"qcom,mdss-dsi-seed-2-command-state",
+	"qcom,mdss-dsi-seed-3-command-state",
+	"qcom,mdss-dsi-seed-4-command-state",
+	"qcom,mdss-dsi-seed-off-command-state",
+	"qcom,mdss-dsi-normal-hbm-on-command-state",
+	"qcom,mdss-dsi-aod-high-mode-command-state",
+	"qcom,mdss-dsi-aod-low-mode-command-state",
+	"qcom,mdss-dsi-cabc-off-command-state",
+	"qcom,mdss-dsi-cabc-low-mode-command-state",
+	"qcom,mdss-dsi-cabc-high-mode-command-state",
+	"qcom,mdss-dsi-data-dimming-on-command-state",
+	"qcom,mdss-dsi-data-dimming-off-command-state",
+	"qcom,mdss-dsi-osc-clk-mode0-command-state",
+	"qcom,mdss-dsi-osc-clk-mode1-command-state",
+	"qcom,mdss-dsi-seed-enter-command-state",
+	"qcom,mdss-dsi-seed-exit-command-state",
+	"qcom,mdss-dsi-hbm-enter-switch-command-state",
+	"qcom,mdss-dsi-hbm-exit-switch-command-state",
+	"qcom,mdss-dsi-levelkey-end-command-state",
+#ifdef OPLUS_FEATURE_AOD_RAMLESS
+	"qcom,mdss-dsi-failsafe-on-command-state",
+	"qcom,mdss-dsi-failsafe-off-command-state",
+#endif /* OPLUS_FEATURE_AOD_RAMLESS */
+#ifdef OPLUS_FEATURE_LCD_CABC
+	"qcom,mdss-dsi-cabc-ui-command-state",
+	"qcom,mdss-dsi-cabc-still-image-command-state",
+	"qcom,mdss-dsi-cabc-video-command-state",
+#endif /*OPLUS_FEATURE_LCD_CABC*/
+//#endif /*OPLUS_BUG_STABILITY*/
 };
 
 static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
@@ -2006,6 +2429,12 @@ static int dsi_panel_parse_reset_sequence(struct dsi_panel *panel)
 	}
 
 	pr_err("RESET SEQ LENGTH = %d\n", length);
+
+	#ifdef OPLUS_BUG_STABILITY
+	panel->reset_timing = utils->read_bool(utils->data,"oppo,reset_timing");
+	pr_err("oppo,reset_timing: %s", panel->reset_timing ? "true" : "false");
+	#endif /* OPLUS_BUG_STABILITY */
+
 	length = length / sizeof(u32);
 
 	size = length * sizeof(u32);
@@ -2120,6 +2549,13 @@ static int dsi_panel_parse_jitter_config(
 	return 0;
 }
 
+#ifdef OPLUS_BUG_STABILITY
+__attribute__((weak)) int
+dsi_panel_parse_panel_power_cfg(struct dsi_panel *panel)
+{
+	return 0;
+}
+#endif /* OPLUS_BUG_STABILITY */
 static int dsi_panel_parse_power_cfg(struct dsi_panel *panel)
 {
 	int rc = 0;
@@ -2209,6 +2645,78 @@ static int dsi_panel_parse_gpios(struct dsi_panel *panel)
 		/* Set default mode as SPLIT mode */
 		panel->reset_config.mode_sel_state = MODE_SEL_DUAL_PORT;
 	}
+
+
+	#ifdef OPLUS_BUG_STABILITY
+	panel->reset_config.lcd_vci_gpio = utils->get_named_gpio(
+		utils->data, "qcom,panel-vci-gpio", 0);
+	if (!gpio_is_valid(panel->reset_config.lcd_vci_gpio))
+		pr_debug("%s: %d qcom,panel-vci-gpio not specified\n", __func__, __LINE__);
+
+	panel->reset_config.err_flag_gpio = utils->get_named_gpio(
+		utils->data, "qcom,err-flag-gpio", 0);
+	if (!gpio_is_valid(panel->reset_config.err_flag_gpio))
+		pr_debug("%s: %d qcom,err-flag-gpio not specified\n", __func__, __LINE__);
+
+	if (utils->read_u32(utils->data, "oplus,lcd-delay-disp-en-gpio",
+		&panel->reset_config.lcd_delay_disp_en_gpio))
+	{
+		pr_err("failed to read oplus,lcd-delay-disp-en-gpio\n");
+		panel->reset_config.lcd_delay_disp_en_gpio=0;
+	}
+
+	if (utils->read_u32(utils->data, "oplus,lcd-delay-reset-gpio",
+		&panel->reset_config.lcd_delay_reset_gpio))
+	{
+		pr_err("failed to read oplus,lcd-delay-reset-gpio\n");
+		panel->reset_config.lcd_delay_reset_gpio=0;
+	}
+
+	if (utils->read_u32(utils->data, "oplus,lcd-delay-mode-sel-gpio",
+		&panel->reset_config.lcd_delay_mode_sel_gpio))
+	{
+		pr_err("failed to read oplus,lcd-delay-mode-sel-gpio\n");
+		panel->reset_config.lcd_delay_mode_sel_gpio=0;
+	}
+
+	if (utils->read_u32(utils->data, "oplus,lcd-delay-set-pinctrl-state",
+		&panel->reset_config.lcd_delay_set_pinctrl_state))
+	{
+		pr_err("failed to read oplus,lcd-delay-set-pinctrl-state\n");
+		panel->reset_config.lcd_delay_set_pinctrl_state=0;
+	}
+
+	if (utils->read_u32(utils->data, "oplus,lcd-delay-enable-regulator",
+		&panel->reset_config.lcd_delay_enable_regulator))
+	{
+		pr_err("failed to read oplus,lcd-delay-enable-regulator\n");
+		panel->reset_config.lcd_delay_enable_regulator=0;
+	}
+
+	if (utils->read_u32(utils->data, "oplus,lcd-delay-vci-gpio",
+		&panel->reset_config.lcd_delay_vci_gpio))
+	{
+		pr_err("failed to read oplus,lcd-delay-vci-gpio\n");
+		panel->reset_config.lcd_delay_vci_gpio=0;
+	}
+
+	if (utils->read_u32(utils->data, "oplus,lcd-delay-lp11-state",
+		&panel->reset_config.lcd_delay_lp11_state))
+	{
+		pr_err("failed to read oplus,lcd-delay-lp11-state\n");
+		panel->reset_config.lcd_delay_lp11_state=0;
+	}
+	#endif /* OPLUS_BUG_STABILITY */
+
+	//#ifdef OPLUS_BUG_DEBUG
+	printk(KERN_INFO "%s:panel->reset_config.lcd_delay_disp_en_gpio=%d", __func__, panel->reset_config.lcd_delay_disp_en_gpio);
+	printk(KERN_INFO "%s:panel->reset_config.lcd_delay_reset_gpio=%d", __func__, panel->reset_config.lcd_delay_reset_gpio);
+	printk(KERN_INFO "%s:panel->reset_config.lcd_delay_mode_sel_gpio=%d", __func__, panel->reset_config.lcd_delay_mode_sel_gpio);
+	printk(KERN_INFO "%s:panel->reset_config.lcd_delay_mode_sel_gpio=%d", __func__, panel->reset_config.lcd_delay_set_pinctrl_state);
+	printk(KERN_INFO "%s:panel->reset_config.lcd_delay_enable_regulator=%d", __func__, panel->reset_config.lcd_delay_enable_regulator);
+	printk(KERN_INFO "%s:panel->reset_config.lcd_delay_vci_gpio=%d", __func__, panel->reset_config.lcd_delay_vci_gpio);
+	printk(KERN_INFO "%s:panel->reset_config.lcd_delay_lp11_state=%d", __func__, panel->reset_config.lcd_delay_lp11_state);
+	//#endif /* OPLUS_BUG_DEBUG */
 
 	/* TODO:  release memory */
 	rc = dsi_panel_parse_reset_sequence(panel);
@@ -2314,6 +2822,26 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
 		panel->bl_config.brightness_max_level = val;
 	}
 
+#ifdef OPLUS_BUG_STABILITY
+	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-bl-normal-max-level", &val);
+	if (rc) {
+		pr_debug("[%s] bl-max-level unspecified, defaulting to max level\n",
+			 panel->name);
+		panel->bl_config.bl_normal_max_level = panel->bl_config.bl_max_level;
+	} else {
+		panel->bl_config.bl_normal_max_level = val;
+	}
+
+	rc = utils->read_u32(utils->data, "qcom,mdss-brightness-normal-max-level",
+		&val);
+	if (rc) {
+		pr_debug("[%s] brigheness-max-level unspecified, defaulting to 255\n",
+			 panel->name);
+		panel->bl_config.brightness_normal_max_level = panel->bl_config.brightness_max_level;
+	} else {
+		panel->bl_config.brightness_normal_max_level = val;
+	}
+
 	rc = utils->read_u32(utils->data,
 			"qcom,mdss-dsi-bl-default-level", &val);
 	if (rc) {
@@ -2326,6 +2854,24 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
 
 	panel->bl_config.bl_inverted_dbv = utils->read_bool(utils->data,
 		"qcom,mdss-dsi-bl-inverted-dbv");
+
+	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-dc-backlight-level", &val);
+	if (rc) {
+		DSI_DEBUG("[%s] dc backlight unspecified, defaulting to default level 260\n",
+			 panel->name);
+		oppo_dimlayer_bl_alpha_v2 = 260;
+	} else {
+		oppo_dimlayer_bl_alpha_v2 = val;
+	}
+
+	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-seed-backlight-max", &val);
+	if (rc) {
+		panel->oppo_priv.seed_bl_max = 255;
+	} else {
+		panel->oppo_priv.seed_bl_max = val;
+	}
+	DSI_DEBUG("[%s] seed backlight max value is %d\n", panel->name, panel->oppo_priv.seed_bl_max);
+#endif /* OPLUS_BUG_STABILITY */
 
 	if (panel->bl_config.type == DSI_BACKLIGHT_PWM) {
 		rc = dsi_panel_parse_bl_pwm_config(panel);
@@ -3192,6 +3738,22 @@ static int dsi_panel_parse_esd_config(struct dsi_panel *panel)
 	esd_config->esd_enabled = utils->read_bool(utils->data,
 		"qcom,esd-check-enabled");
 
+#ifdef OPLUS_BUG_STABILITY
+	switch(get_boot_mode())
+	{
+		case MSM_BOOT_MODE__RF:
+		case MSM_BOOT_MODE__WLAN:
+		case MSM_BOOT_MODE__FACTORY:
+			esd_config->esd_enabled = 0x0;
+			pr_err("%s force disable esd check while in rf,wlan and factory mode, esd staus: 0x%x\n",
+						__func__, esd_config->esd_enabled);
+			break;
+
+		default:
+			break;
+	}
+#endif /*OPLUS_BUG_STABILITY*/
+
 	if (!esd_config->esd_enabled)
 		return 0;
 
@@ -3318,7 +3880,7 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 
 	rc = dsi_panel_parse_qsync_caps(panel, of_node);
 	if (rc)
-		pr_debug("failed to parse qsync features, rc=%d\n", rc);
+		pr_err("failed to parse qsync features, rc=%d\n", rc);
 
 	/* allow qsync support only if DFPS is with VFP approach */
 	if ((panel->dfps_caps.dfps_support) &&
@@ -3341,9 +3903,42 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 		goto error;
 	}
 
+#ifdef OPLUS_BUG_STABILITY
+	rc = dsi_panel_parse_oppo_config(panel);
+	if (rc)
+		DSI_ERR("failed to parse panel config, rc=%d\n", rc);
+#endif /* OPLUS_BUG_STABILITY */
+
+#ifdef OPLUS_FEATURE_LCD_CABC
+	if(panel->oppo_priv.is_19696_lcd)
+		is_support_cabc = true;
+	else
+		is_support_cabc = false;
+
+#endif /*OPLUS_FEATURE_LCD_CABC*/
+
+#ifdef OPLUS_BUG_STABILITY
+/*Jiasong.ZhongPSW.MM.Display.LCD.Stable,2020-09-17 add for DC backlight */
+	rc = dsi_panel_parse_oppo_dc_config(panel);
+	if (rc)
+		DSI_ERR("failed to parse dc config, rc=%d\n", rc);
+#endif /* OPLUS_BUG_STABILITY */
+
+#ifdef OPLUS_BUG_STABILITY
+	rc = oplus_display_get_panel_parameters(panel, utils);
+	if (rc)
+		DSI_INFO("failed to get oplus panel parameters\n");
+#endif /* OPLUS_BUG_STABILITY */
+
 	rc = dsi_panel_parse_power_cfg(panel);
 	if (rc)
 		pr_err("failed to parse power config, rc=%d\n", rc);
+
+#ifdef OPLUS_BUG_STABILITY
+	rc = dsi_panel_parse_panel_power_cfg(panel);
+	if (rc)
+		DSI_ERR("failed to parse panel_power config, rc=%d\n", rc);
+#endif /* OPLUS_BUG_STABILITY */
 
 	rc = dsi_panel_parse_bl_config(panel);
 	if (rc) {
@@ -3562,21 +4157,9 @@ int dsi_panel_get_mode_count(struct dsi_panel *panel)
 	num_bit_clks = !panel->dyn_clk_caps.dyn_clk_support ? 1 :
 					panel->dyn_clk_caps.bit_clk_list_len;
 
-	/*
-	 * Inflate num_of_modes by fps and bit clks in dfps
-	 * Single command mode for video mode panels supporting
-	 * panel operating mode switch.
-	 */
-
-	num_video_modes = num_video_modes * num_bit_clks * num_dfps_rates;
-
-	if ((panel->panel_mode == DSI_OP_VIDEO_MODE) &&
-			(panel->panel_mode_switch_enabled))
-		num_cmd_modes  = 1;
-	else
-		num_cmd_modes = num_cmd_modes * num_bit_clks;
-
-	panel->num_display_modes = num_video_modes + num_cmd_modes;
+	/* Inflate num_of_modes by fps and bit clks in dfps */
+	panel->num_display_modes = (num_cmd_modes * num_bit_clks) +
+			(num_video_modes * num_bit_clks * num_dfps_rates);
 
 error:
 	return rc;
@@ -3699,6 +4282,12 @@ int dsi_panel_get_mode(struct dsi_panel *panel,
 			pr_err("failed to parse command sets, rc=%d\n", rc);
 			goto parse_fail;
 		}
+
+#ifdef OPLUS_BUG_STABILITY
+		rc = dsi_panel_parse_oppo_mode_config(mode, utils);
+		if (rc)
+			pr_err("failed to parse oppo config, rc=%d\n", rc);
+#endif
 
 		rc = dsi_panel_parse_jitter_config(mode, utils);
 		if (rc)
@@ -3864,6 +4453,9 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 		return -EINVAL;
 	}
 
+#ifdef OPLUS_BUG_STABILITY
+	pr_err("%s\n", __func__);
+#endif /* OPLUS_BUG_STABILITY */
 	mutex_lock(&panel->panel_lock);
 	if (!panel->panel_initialized)
 		goto exit;
@@ -3884,6 +4476,11 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP1 cmd, rc=%d\n",
 		       panel->name, rc);
+#ifdef OPLUS_BUG_STABILITY
+	//oppo_update_aod_light_mode_unlock(panel);
+	panel->need_power_on_backlight = true;
+	set_oppo_display_power_status(OPPO_DISPLAY_POWER_DOZE);
+#endif /* OPLUS_BUG_STABILITY */
 exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -3898,6 +4495,9 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 		return -EINVAL;
 	}
 
+#ifdef OPLUS_BUG_STABILITY
+	pr_err("%s\n", __func__);
+#endif /* OPLUS_BUG_STABILITY */
 	mutex_lock(&panel->panel_lock);
 	if (!panel->panel_initialized)
 		goto exit;
@@ -3906,6 +4506,9 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP2 cmd, rc=%d\n",
 		       panel->name, rc);
+#ifdef OPLUS_BUG_STABILITY
+	set_oppo_display_power_status(OPPO_DISPLAY_POWER_DOZE_SUSPEND);
+#endif /* OPLUS_BUG_STABILITY */
 exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -3920,6 +4523,9 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 		return -EINVAL;
 	}
 
+#ifdef OPLUS_BUG_STABILITY
+	pr_err("%s\n", __func__);
+#endif /* OPLUS_BUG_STABILITY */
 	mutex_lock(&panel->panel_lock);
 	if (!panel->panel_initialized)
 		goto exit;
@@ -3936,6 +4542,10 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 		       panel->name, rc);
+
+#ifdef OPLUS_BUG_STABILITY
+	set_oppo_display_power_status(OPPO_DISPLAY_POWER_ON);
+#endif /* OPLUS_BUG_STABILITY */
 exit:
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -3960,6 +4570,15 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 			goto error;
 		}
 	}
+	#ifdef OPLUS_BUG_STABILITY
+	if(!strcmp(panel->name, "samsung sofef03f_m amoled fhd+ panel with DSC")){
+		if (panel->reset_config.lcd_delay_lp11_state)
+			usleep_range(panel->reset_config.lcd_delay_lp11_state,
+				panel->reset_config.lcd_delay_lp11_state + 100);
+		if (rc)
+			pr_err("unable to set lcd_delay_lp11_state dir for disp gpio rc=%d\n", rc);
+	}
+	#endif /* OPLUS_BUG_STABILITY */
 
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON);
 	if (rc) {
@@ -4184,6 +4803,11 @@ int dsi_panel_mode_switch_to_cmd(struct dsi_panel *panel)
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_POST_VID_TO_CMD_SWITCH cmds, rc=%d\n",
 			panel->name, rc);
+
+#ifdef OPLUS_FEATURE_AOD_RAMLESS
+	oppo_display_update_aod_area_unlock();
+#endif /* OPLUS_FEATURE_AOD_RAMLESS */
+
 	mutex_unlock(&panel->panel_lock);
 	return rc;
 }
@@ -4255,6 +4879,9 @@ int dsi_panel_enable(struct dsi_panel *panel)
 		return -EINVAL;
 	}
 
+//#ifdef OPLUS_BUG_STABILITY
+	pr_err("%s\n", __func__);
+//#endif /* OPLUS_BUG_STABILITY */
 	mutex_lock(&panel->panel_lock);
 
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON);
@@ -4263,7 +4890,12 @@ int dsi_panel_enable(struct dsi_panel *panel)
 		       panel->name, rc);
 	else
 		panel->panel_initialized = true;
+//#ifdef OPLUS_BUG_STABILITY
+	panel->need_power_on_backlight = true;
+	set_oppo_display_power_status(OPPO_DISPLAY_POWER_ON);
+//#endif /* OPLUS_BUG_STABILITY */
 	mutex_unlock(&panel->panel_lock);
+	lcd_queue_load_tp_fw();
 	return rc;
 }
 
@@ -4321,6 +4953,9 @@ int dsi_panel_disable(struct dsi_panel *panel)
 		return -EINVAL;
 	}
 
+#ifdef OPLUS_BUG_STABILITY
+	pr_err("%s\n", __func__);
+#endif /* OPLUS_BUG_STABILITY */
 	mutex_lock(&panel->panel_lock);
 
 	/* Avoid sending panel off commands when ESD recovery is underway */
@@ -4350,6 +4985,10 @@ int dsi_panel_disable(struct dsi_panel *panel)
 	}
 	panel->panel_initialized = false;
 	panel->power_mode = SDE_MODE_DPMS_OFF;
+//#ifdef OPLUS_BUG_STABILITY
+	panel->is_hbm_enabled = false;
+	set_oppo_display_power_status(OPPO_DISPLAY_POWER_OFF);
+//#endif /* OPLUS_BUG_STABILITY */
 
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -4386,7 +5025,14 @@ int dsi_panel_post_unprepare(struct dsi_panel *panel)
 		pr_err("invalid params\n");
 		return -EINVAL;
 	}
-
+	#ifdef OPLUS_BUG_STABILITY
+	if(!strcmp(panel->name, "samsung sofef03f_m amoled fhd+ panel with DSC")) {
+		if (panel->err_flag_status == true) {
+			pr_err("no need to power off when err flag irq comes\n");
+			return rc;
+		}
+	}
+	#endif /* OPLUS_BUG_STABILITY */
 	mutex_lock(&panel->panel_lock);
 
 	rc = dsi_panel_power_off(panel);
