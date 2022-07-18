@@ -112,4 +112,5 @@ int dsi_pwr_enable_regulator(struct dsi_regulator_info *regs, bool enable);
 int dsi_pwr_panel_regulator_mode_set(struct dsi_regulator_info *regs,
 					const char *reg_name,
 					int regulator_mode);
+extern int tp_gesture_enable_flag(void);
 #endif /* _DSI_PWR_H_ */

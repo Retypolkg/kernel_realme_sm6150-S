@@ -156,6 +156,7 @@
 #define DSI_CPHY_MODE_CTRL                         (0x02D8)
 #define DSI_LOGICAL_LANE_SWAP_CTRL                 (0x0310)
 #define DSI_SPLIT_LINK                             (0x0330)
-
-
+// #ifdef OPLUS_BUG_STABILITY
+#define DSI_SCRAMBLE_CTRL                          (0x0328)
+// #endif /*OPLUS_BUG_STABILITY*/
 #endif /* _DSI_CTRL_REG_H_ */

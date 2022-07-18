@@ -19,6 +19,7 @@
 #include "dsi_pwr.h"
 #include "dsi_parser.h"
 
+static int tp_gesture_pwr_flag = 0;
 /*
  * dsi_pwr_parse_supply_node() - parse power supply node from root device node
  */
@@ -137,6 +138,15 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 
 	if (enable) {
 		for (i = 0; i < regs->count; i++) {
+			if (tp_gesture_pwr_flag) {
+				if ((strcmp(regs->vregs[i].vreg_name,"lab")==0) ||
+						(strcmp(regs->vregs[i].vreg_name,"ibb")==0) ||
+							(strcmp(regs->vregs[i].vreg_name,"vddio")==0) ) {
+					tp_gesture_pwr_flag--;
+					//pr_info("LQTP-no enable vreg %s\n",regs->vregs[i].vreg_name);
+					continue;
+				}
+			}
 			vreg = &regs->vregs[i];
 			if (vreg->pre_on_sleep)
 				msleep(vreg->pre_on_sleep);
@@ -172,6 +182,16 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 		}
 	} else {
 		for (i = (regs->count - 1); i >= 0; i--) {
+			if (tp_gesture_enable_flag()) {
+				if ((strcmp(regs->vregs[i].vreg_name,"lab")==0) ||
+						(strcmp(regs->vregs[i].vreg_name,"ibb")==0) ||
+							(strcmp(regs->vregs[i].vreg_name,"vddio")==0) ) {
+					tp_gesture_pwr_flag++;
+					//pr_info("LQTP-no disable vreg %s\n",regs->vregs[i].vreg_name);
+					continue;
+				}
+			}
+
 			if (regs->vregs[i].pre_off_sleep)
 				msleep(regs->vregs[i].pre_off_sleep);
 
