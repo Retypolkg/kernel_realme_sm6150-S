@@ -176,6 +176,7 @@ out:
 	inode_unlock(fuse_inode);
 
 	return ret;
+}
 
 ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma)
 {
