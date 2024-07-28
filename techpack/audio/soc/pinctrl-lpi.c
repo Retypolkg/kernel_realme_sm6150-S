@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -223,14 +221,12 @@ static int lpi_gpio_set_mux(struct pinctrl_dev *pctldev, unsigned int function,
 
 	pad = pctldev->desc->pins[pin].drv_data;
 
-	if (pad != NULL) {
-		pad->function = function;
+	pad->function = function;
 
-		val = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);
-		val &= ~(LPI_GPIO_REG_FUNCTION_MASK);
-		val |= pad->function << LPI_GPIO_REG_FUNCTION_SHIFT;
-		lpi_gpio_write(pad, LPI_GPIO_REG_VAL_CTL, val);
-	}
+	val = lpi_gpio_read(pad, LPI_GPIO_REG_VAL_CTL);
+	val &= ~(LPI_GPIO_REG_FUNCTION_MASK);
+	val |= pad->function << LPI_GPIO_REG_FUNCTION_SHIFT;
+	lpi_gpio_write(pad, LPI_GPIO_REG_VAL_CTL, val);
 	return 0;
 }
 
@@ -782,7 +778,17 @@ static struct platform_driver lpi_pinctrl_driver = {
 	.remove = lpi_pinctrl_remove,
 };
 
-module_platform_driver(lpi_pinctrl_driver);
+static int __init lpi_init(void)
+{
+	return platform_driver_register(&lpi_pinctrl_driver);
+}
+late_initcall(lpi_init);
+
+static void __exit lpi_exit(void)
+{
+	platform_driver_unregister(&lpi_pinctrl_driver);
+}
+module_exit(lpi_exit);
 
 MODULE_DESCRIPTION("QTI LPI GPIO pin control driver");
 MODULE_LICENSE("GPL v2");
