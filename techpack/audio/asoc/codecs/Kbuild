@@ -204,12 +204,13 @@ KBUILD_EXTRA_SYMBOLS +=$(OUT)/obj/vendor/qcom/opensource/audio-kernel/soc/Module
 endif
 
 ifeq ($(KERNEL_BUILD), 1)
+	obj-y	+= bolero/
 	obj-y	+= wcd934x/
 	obj-y	+= sdm660_cdc/
 	obj-y	+= msm_sdw/
 	obj-y	+= wcd9360/
 	obj-y	+= wcd937x/
-	obj-y	+= bolero/
+	obj-y	+= tfa98xx-v6/
 endif
 
 ifeq ($(CONFIG_SND_SOC_GCOV), y)
